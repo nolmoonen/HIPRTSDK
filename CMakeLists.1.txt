@@ -1,0 +1,76 @@
+cmake_minimum_required(VERSION 3.26)
+
+project(hiprtsdk)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+function(ADD_TUTORIAL NAME)
+    set(PATH "${CMAKE_SOURCE_DIR}/tutorials/${NAME}")
+    file(GLOB_RECURSE PATH_SOURCES CONFIGURE_DEPENDS "${PATH}/*.h" "${PATH}/*.cpp")
+    add_executable(${NAME} ${PATH_SOURCES})
+    target_link_libraries(${NAME} PRIVATE tutorial_common)
+    # set binary dir so ../common/TutorialKernels.h is a correct path
+    set_target_properties(${NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    add_dependencies(${NAME} copy-kernels)
+    # tutorial code looks for '../hiprt/hiprt.h' or '../../hiprt/hiprt.h'
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/hiprt")
+    file(GLOB HIPRT_HEADERS "${CMAKE_SOURCE_DIR}/hiprt/*.h")
+    add_custom_command(
+            TARGET ${NAME}
+            COMMAND ${CMAKE_COMMAND}
+            ARGS -E copy -t "${CMAKE_BINARY_DIR}/hiprt" ${HIPRT_HEADERS}
+            COMMENT "copying hiprt device headers (once)")
+    IF (WIN32)
+        target_compile_definitions(${NAME} PUBLIC __WINDOWS__)
+        # copy all dlls
+        add_custom_command(
+                TARGET ${NAME} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/hiprt/win" $<TARGET_FILE_DIR:${NAME}>
+                COMMAND_EXPAND_LISTS)
+    ENDIF ()
+endfunction()
+
+add_library(cuew "contrib/Orochi/contrib/cuew/src/cuew.cpp")
+target_include_directories(cuew PUBLIC "contrib/Orochi")
+
+add_library(hipew "contrib/Orochi/contrib/hipew/src/hipew.cpp")
+target_include_directories(hipew PUBLIC "contrib/Orochi")
+target_link_libraries(hipew PRIVATE version)
+
+add_library(orochi "contrib/Orochi/Orochi/Orochi.cpp" "contrib/Orochi/Orochi/OrochiUtils.cpp")
+target_include_directories(orochi PUBLIC "contrib/Orochi")
+target_link_libraries(orochi PRIVATE cuew hipew)
+
+add_library(hiprt SHARED IMPORTED)
+target_include_directories(hiprt INTERFACE "hiprt")
+set(HIPRT_VER 0200164)
+IF (WIN32)
+    set_target_properties(hiprt PROPERTIES
+            IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/hiprt/win/hiprt${HIPRT_VER}.dll"
+            IMPORTED_IMPLIB "${CMAKE_SOURCE_DIR}/hiprt/win/hiprt${HIPRT_VER}.lib")
+ELSE ()
+    set_target_properties(hiprt PROPERTIES
+            IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/hiprt/linux64/libhiprt${HIPRT_VER}.so")
+ENDIF ()
+
+add_library(tutorial_common STATIC "tutorials/common/TutorialBase.cpp")
+target_include_directories(tutorial_common PUBLIC ${CMAKE_SOURCE_DIR})
+target_link_libraries(tutorial_common PUBLIC orochi hiprt)
+
+# tutorial code looks for '../common/TutorialKernels.h'
+# copy the kernel code to a directory in the build dir
+# https://discourse.cmake.org/t/copy-resources-to-build-folder/1010
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/common")
+file(GLOB KERNELS "${CMAKE_SOURCE_DIR}/tutorials/common/*.h")
+add_custom_command(
+        OUTPUT COPY_KERNELS
+        COMMAND ${CMAKE_COMMAND}
+        ARGS -E copy_if_different ${KERNELS} "${CMAKE_BINARY_DIR}/common"
+        DEPENDS ${KERNELS}
+        COMMENT "copying kernel headers (on change)")
+add_custom_target(copy-kernels DEPENDS COPY_KERNELS)
+
+ADD_TUTORIAL("00_context_creation")
+ADD_TUTORIAL("01_geom_intersection")
+ADD_TUTORIAL("02_scene_intersection")
